@@ -1,3 +1,4 @@
+import configparser
 from datetime import datetime, timedelta
 from mysql import connector
 from mysql.connector import errorcode
@@ -6,11 +7,12 @@ from mysql.connector import errorcode
 class CrawlerDBHandler:
     def __init__(self, db_name, table_name, usrname, pswd, host):
         ''' Initializes CrawlerDBHandler with parameters and detects the connection is live. '''
-        self.DB_NAME = db_name
-        self.TABLE_NAME = table_name
-        self.USERNAME = usrname
-        self.PASSWORD = pswd
-        self.HOST = host
+        self.read_config()
+        self.DB_NAME = self.config['db_name']
+        self.TABLE_NAME = self.config['table_name']
+        self.USERNAME = self.config['username']
+        self.PASSWORD = self.config['password']
+        self.HOST = self.config['host_type']
         self.connect()
         self.create_table()
 
@@ -157,6 +159,21 @@ class CrawlerDBHandler:
         return self.execute(query=insert_link, params=new_link)
 
 
+    def read_config(self):
+        ''' Reads parameters for database configuration. '''
+        self.config = {}
+        config_parser = configparser.ConfigParser()
+        config_parser.read("config.cfg")
+        for k, v in config_parser.items(section="database"):
+            self.config.update({k: v})
+
+        
+    def row_count(self):
+        ''' Returns row count of links table. '''
+        return self.execute(f"SELECT COUNT(*) FROM {self.TABLE_NAME};", fetch=True)
+
+
+
     def update_visit(self, id, resp_status, content_type, content_len, file_path):
         ''' Updates a link if visited. '''
         update_link = f'''
@@ -170,3 +187,4 @@ class CrawlerDBHandler:
         '''
         visit_info = (resp_status, datetime.now(), content_type, content_len, file_path)
         self.execute(query=update_link, params=visit_info)
+

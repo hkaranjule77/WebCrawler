@@ -1,12 +1,16 @@
 import configparser
+import time
 from datetime import datetime, timedelta
 from mysql import connector
 from mysql.connector import errorcode
 
 
 class CrawlerDBHandler:
-    def __init__(self, db_name, table_name, usrname, pswd, host):
-        ''' Initializes CrawlerDBHandler with parameters and detects the connection is live. '''
+    def __init__(self):
+        """ Initializes CrawlerDBHandler with parameters and detects the connection is live. """
+        self.config = {}
+        self.connector = None
+        self.cursor = None
         self.read_config()
         self.DB_NAME = self.config['db_name']
         self.TABLE_NAME = self.config['table_name']
@@ -14,33 +18,32 @@ class CrawlerDBHandler:
         self.PASSWORD = self.config['password']
         self.HOST = self.config['host_type']
         self.connect()
-        self.create_table()
-
 
     def close(self):
-        ''' Closes a connection with the database. '''
-        if self.connector:
+        """ Closes a connection with the database. """
+        if self.connector is not None:
             self.connector.close()
         else:
             raise ValueError(" Connector value is not initialize. ")
-        
-        
+
     def connect(self):
-        ''' 
+        """
             Makes connection with MySQL Database server.
             If check is set to True,
                 it detects by making connection and closes it.
             Else if check is set to False,
-                it makes a connection and also initializes a cursor. 
-        '''
+                it makes a connection and also initializes a cursor.
+        """
         try:
             self.connector = connector.connect(
+                pool_size=5,
                 host=self.HOST,
                 user=self.USERNAME,
                 password=self.PASSWORD,
-                database=self.DB_NAME
+                database=self.DB_NAME,
+                autocommit=True
             )
-            self.cursor = self.connector.cursor()
+            self.cursor = self.connector.cursor(dictionary=True)
             print("Database Connected:", self.DB_NAME)
         except connector.Error as err:
             print(err.errno, end=": ")
@@ -58,13 +61,12 @@ class CrawlerDBHandler:
                 print("Database server is down.")
             else:
                 print("Unknown Error while connecting.")
-        
 
     def create_db(self):
-        ''' Creates a New Database crawler if does not exist. '''
+        """ Creates a New Database crawler if does not exist. """
         self.connector = connector.connect(
-            user = self.USERNAME,
-            password = self.PASSWORD
+            user=self.USERNAME,
+            password=self.PASSWORD
         )
         add_db = f"CREATE DATABASE IF NOT EXISTS {self.DB_NAME};"
         self.cursor = self.connector.cursor()
@@ -74,9 +76,8 @@ class CrawlerDBHandler:
         self.create_table()
         self.connector.close()
 
-
     def create_table(self):
-        ''' Creates Table links if does not exists. '''
+        """ Creates Table links if does not exists. """
         add_table = f'''
             CREATE TABLE IF NOT EXISTS {self.TABLE_NAME}(
                 id INT PRIMARY KEY AUTO_INCREMENT, 
@@ -92,40 +93,44 @@ class CrawlerDBHandler:
             )
             CHARSET=latin1;
         '''
+        self.connect()
+        self.close()
         if self.execute(add_table):
             print("New Table created:", self.TABLE_NAME)
-        
+            self.connect()
 
-    def execute(self, query, params=None, fetch=False):
-        ''' Executes query with cursor by creating connection. 
+    def execute(self, query, values=None, fetch=False):
+        """ Executes query with cursor by creating connection.
 
             Parameters:
-                params (list/tuple): Parameters in case of insert query.
+                values (list/tuple): Parameters in case of insert query.
                 fetch (bool): Is this a select query?.
-            
+
             Output:
                 If fetch is set to true then
                     it returns a boolean value and list of experiments.
                 Else then
                     it returns a boolean value based on success/failure.
-            '''
-        if self.connector:
-            if self.cursor:
+            """
+        if self.connector is not None:
+            if self.cursor is not None:
                 try:
-                    if params:
-                        self.cursor.execute(query, params)
+                    if values is not None:
+                        self.cursor.execute(query, values)
                     else:
                         self.cursor.execute(query)
                     if fetch:
                         return self.cursor.fetchall()
-                    self.connector.close()
                     return True
                 except connector.Error as err:
-                    print(err.errno, ":", sep="")
                     if err.errno == errorcode.ER_BAD_TABLE_ERROR:
                         print("Table does not exist:", self.TABLE_NAME)
                         self.create_table()
+                    elif err.errno == errorcode.ER_DUP_ENTRY:
+                        # print("link is repeated")
+                        pass
                     else:
+                        print(err.errno, ":", sep="", end=" ")
                         print("While executing query")
             else:
                 raise TypeError("Cursor is not initialized.")
@@ -135,56 +140,54 @@ class CrawlerDBHandler:
             return False, []
         return False
 
-
     def get_unvisited(self):
-        ''' Retrieves unvisited links from the database. '''
+        """ Retrieves unvisited links from the database. """
         get_unvisit = f"SELECT * FROM {self.TABLE_NAME} WHERE is_crawled=0;"
-        success, result = self.execute(query=get_unvisit, fetch=True)
-        if success:
-            return result
+        result = self.execute(query=get_unvisit, fetch=True)
+        return list(result)
 
-    
-    def get_unrefreshed(self, from=datetime.now()-timedelta(days=1)):
-        get_unrefresh = f'''SELECT * FROM {self.TABLE_NAME} 
-        WHERE last_crawl_dt > {from.strftime("%Y-%-m-%-d %H:%M:%S")};'''
-        success, result = self.execute(query=get_unrefresh, fetch=True)
-        if success:
-            return result
-
+    def get_unrefreshed(self, from_dt=datetime.now() - timedelta(days=1)):
+        """ Fetchs unrefreshed data which aren't updated recently. """
+        get_unrefreshed = f'''SELECT * FROM {self.TABLE_NAME} 
+        WHERE last_crawl_dt > {from_dt.strftime("%Y-%-m-%-d %H:%M:%S")};'''
+        result = self.execute(query=get_unrefreshed, fetch=True)
+        return list(result)
 
     def insert_unvisited(self, link, src_link):
-        ''' Inserts unvisited links in database with current datetime. '''
-        insert_link = f"INSERT INTO {self.TABLE_NAME}(link, src_link, created_at) VALUES('%s', '%s', '%s');"
+        """ Inserts unvisited links in database with current datetime. """
+        insert_link = "INSERT INTO {}(link, src_link, created_at) VALUES(%s, %s, %s);".format(self.TABLE_NAME)
         new_link = (link, src_link, datetime.now())
-        return self.execute(query=insert_link, params=new_link)
-
+        # print("Insert query:", insert_link, new_link)
+        return self.execute(query=insert_link, values=new_link)
 
     def read_config(self):
-        ''' Reads parameters for database configuration. '''
-        self.config = {}
+        """ Reads parameters for database configuration. """
         config_parser = configparser.ConfigParser()
         config_parser.read("config.cfg")
         for k, v in config_parser.items(section="database"):
             self.config.update({k: v})
 
-        
     def row_count(self):
-        ''' Returns row count of links table. '''
-        return self.execute(f"SELECT COUNT(*) FROM {self.TABLE_NAME};", fetch=True)
-
-
+        """ Returns row count of links table. """
+        result = self.execute(f"SELECT COUNT(*) FROM {self.TABLE_NAME};", fetch=True)
+        # print("row_count:", result)
+        # indexes at end of statement [row_index][column name]
+        print("row count result:", result)
+        row = result[0]
+        row_count = result[0]['COUNT(*)']
+        return row_count
 
     def update_visit(self, id, resp_status, content_type, content_len, file_path):
-        ''' Updates a link if visited. '''
+        """ Updates a link if visited. """
         update_link = f'''
         UPDATE {self.TABLE_NAME} 
-        SET response_status=%s, 
-            last_crawl_at=%s,
+        SET is_crawled=%s,
+            response_status=%s, 
+            last_crawl_dt=%s,
             content_type=%s,
             content_len=%s,
             file_path=%s
         WHERE id=%s;
         '''
-        visit_info = (resp_status, datetime.now(), content_type, content_len, file_path)
-        self.execute(query=update_link, params=visit_info)
-
+        visit_info = (True, resp_status, datetime.now(), content_type, content_len, file_path, id)
+        self.execute(query=update_link, values=visit_info)

@@ -1,1 +1,8 @@
+.idea/
+.ipynb_checkpoints/
+__pycache__/
 test/
+venv/
+html_pgs/
+logger.py
+connection_error.log

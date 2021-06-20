@@ -7,9 +7,14 @@ from threading import Lock
 
 
 class CrawlerDBHandler:
-    def __init__(self):
-        """ Initializes CrawlerDBHandler with parameters and detects the connection is live. """
+    def __init__(self, con_count=1):
+        """
+        Initializes CrawlerDBHandler with parameters and detects the connection is live.
+        Parameters:
+            con_count(integer): count of connection made to database server.
+        """
         self.config = {}
+        self.con_count = con_count                      # connection count
         self.connector = None
         self.cursor = None
         self.lock = Lock()
@@ -40,7 +45,7 @@ class CrawlerDBHandler:
         """
         try:
             self.connector = connector.connect(
-                pool_size=30,
+                pool_size=self.con_count,
                 host=self.HOST,
                 user=self.USERNAME,
                 password=self.PASSWORD,
@@ -162,7 +167,7 @@ class CrawlerDBHandler:
             return False, []
         return False
 
-    def get_uncrawled(self):
+    def get_unvisited(self):
         """ Retrieves unvisited links from the database. """
         get_uncrawl = f"SELECT * FROM {self.TABLE_NAME} WHERE is_crawled=0 LIMIT {self.MAX_ROW_LIMIT};"
         result = self.execute(query=get_uncrawl, fetch=True)
@@ -199,7 +204,7 @@ class CrawlerDBHandler:
         row_count = result[0]['COUNT(*)']
         return row_count
 
-    def update_visit(self, id, resp_status, content_type, content_len, file_path):
+    def update_visit(self, id, resp_status, content_type=None, content_len=None, file_path=None):
         """ Updates a link if visited. """
         update_link = f'''
         UPDATE {self.TABLE_NAME} 

@@ -36,7 +36,7 @@ class Logger:
             raise ValueError('link value is not passed.')
 
     def is_blocked(self):
-        ''' Checks frequency of logging if it's really high then it stops logging temporarily. '''
+        """ Checks frequency of logging if it's really high then it stops logging temporarily. """
         self.link_count += 1
         freq = self.link_count / (time() - self.start_interval)
         if freq > 5.0:

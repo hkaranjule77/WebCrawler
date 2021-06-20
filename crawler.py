@@ -32,11 +32,12 @@ class Lock:
 
 
 class WebCrawler:
-    def __init__(self):
+    def __init__(self, link_fetcher):
         """ Initializes configuration and starts crawls. """
         # TODO: create log of error links or when it's invalid also log it.
         # TODO: update files instead of creating new file.
-        self.db_handler = db.CrawlerDBHandler()
+        self.db_handler = db.CrawlerDBHandler(con_count=25)
+        self.link_fetcher = link_fetcher
         self.links = []
         self.logger = logger.Logger()
         self.save_limit_reached = False
@@ -57,8 +58,8 @@ class WebCrawler:
         """ Executes steps required for scraping. """
         # unvisited
         # print("Crawling:", link_row["link"])
-        response = self.get_page(link_row["link"])
-        if response is not False:
+        response = self.get_page(link_row)
+        if response is not False and response.status_code == 200:
             if not self.save_limit_reached:
                 self.add_new_links(response.text, response.url)
             if link_row['is_crawled']:
@@ -70,9 +71,14 @@ class WebCrawler:
             else:
                 file_path = WebCrawler.save_page(self.config['html_page_dir'], response.text)
             self.update_row(link_row["id"], response, file_path)
+        if response is not False:
+            self.db_handler.update_visit(link_row["id"], resp_status=response.status_code)
+        else:
+            self.db_handler.update_visit(link_row["id"], resp_status=204)
 
     def crawl(self):
         """ Main method of a WebCrawler object. """
+        '''
         self.fetch_links()
         print("Links to be visited:", len(self.unvisited_links), len(self.unrefreshed_links))
         # Multi-threading
@@ -89,6 +95,7 @@ class WebCrawler:
                 print("All links crawled.")
                 time.sleep(self.config['sleep_time'])
             '''
+        '''
         # Single-threading
         while True:
             while len(self.unvisited_links) > 0:
@@ -106,7 +113,12 @@ class WebCrawler:
             if len(self.unvisited_links) == 0 and len(self.unrefreshed_links) == 0:
                 print("All links crawled")
                 time.sleep(5)
-            '''
+        '''
+        while True:
+            link = self.link_fetcher.pop()
+            self.link_fetcher.release_lock()
+            self.visit(link_row=link)
+
 
     def __read_config(self):
         """ Reads Configurations into a params dictionary. """
@@ -155,30 +167,37 @@ class WebCrawler:
     def fetch_links(self):
         """ Updates unvisited  links firsts if those are done.
             Then unrefreshed links are updated. """
-        self.unvisited_links = self.db_handler.get_uncrawled()
+        self.unvisited_links = self.db_handler.get_unvisited()
         refresh_after = int(self.config["link_refresh_after_hrs"])
         self.unrefreshed_links = self.db_handler.get_unrefreshed(datetime.now() - timedelta(hours=refresh_after))
 
-    def get_page(self, link):
+    def get_page(self, link_row):
         """ Downloads a webpage from provided hyperlink. """
         try:
+            link = link_row['link']
             response = requests.get(link, timeout=self.timeout, headers={"Accept-Encoding": None})
+            print(response.status_code, response.headers)
             print("visited:", link)
             return response
         except requests.exceptions.MissingSchema:
             print("MissingSchema", link)
+            self.db_handler.update_visit(id=link_row['id'], resp_status=404)
             self.logger.log("missing_schema", link)
         except requests.exceptions.InvalidSchema:
             print("InvalidSchema", link)
+            self.db_handler.update_visit(id=link_row['id'], resp_status=404)
             self.logger.log("invalid_schema", link)
         except requests.exceptions.ConnectionError:
             print("ConnectionError:", link)
+            self.db_handler.update_visit(id=link_row['id'], resp_status=502)
             self.logger.log("connection_error", link)
         except requests.exceptions.TooManyRedirects:
             print("Too Many Redirects:", link)
+            self.db_handler.update_visit(id=link_row['id'], resp_status=502)
             self.logger.log("too_many_redirect", link)
         except requests.exceptions.Timeout:
             print("Timeout:", link)
+            self.db_handler.update_visit(id=link_row['id'], resp_status=408)
             self.logger.log("timeout.log", link)
         return False
 
@@ -235,17 +254,19 @@ class WebCrawler:
                 links.append(link)
         return links
 
-    def update_row(self, row_id, response, file_path):
+    def update_row(self, row_id, response, file_path=None):
         """ Saves updated data of link in corresponding row of database. """
-        resp_status = response.status_code
-        content_type = response.headers['Content-Type']
-        try:
-            content_len = response.headers['Content-Length']
-        except KeyError:
-            content_len = len(response.content)
-        self.db_handler.update_visit(id=row_id,
-                                     resp_status=resp_status,
-                                     content_type=content_type,
-                                     content_len=content_len,
-                                     file_path=file_path
-                                     )
+        if response.status_code == 200:
+            content_type = response.headers['Content-Type']
+            try:
+                content_len = response.headers['Content-Length']
+            except KeyError:
+                content_len = len(response.content)
+                self.db_handler.update_visit(id=row_id,
+                                             resp_status=response.status_code,
+                                             content_type=content_type,
+                                             content_len=content_len,
+                                             file_path=file_path)
+        else:
+            self.db_handler.update_visit(id=row_id,
+                                         resp_status=response.status_code)

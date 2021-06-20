@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timedelta
 from mysql import connector
 from mysql.connector import errorcode
+from threading import Lock
 
 
 class CrawlerDBHandler:
@@ -11,12 +12,15 @@ class CrawlerDBHandler:
         self.config = {}
         self.connector = None
         self.cursor = None
+        self.lock = Lock()
         self.read_config()
         self.DB_NAME = self.config['db_name']
         self.TABLE_NAME = self.config['table_name']
         self.USERNAME = self.config['username']
         self.PASSWORD = self.config['password']
         self.HOST = self.config['host_type']
+        self.MAX_ROW_LIMIT = self.config['max_row_read']
+        del self.config
         self.connect()
 
     def close(self):
@@ -36,7 +40,7 @@ class CrawlerDBHandler:
         """
         try:
             self.connector = connector.connect(
-                pool_size=5,
+                pool_size=30,
                 host=self.HOST,
                 user=self.USERNAME,
                 password=self.PASSWORD,
@@ -116,19 +120,37 @@ class CrawlerDBHandler:
             if self.cursor is not None:
                 try:
                     if values is not None:
+                        self.lock.acquire()
                         self.cursor.execute(query, values)
-                    else:
+                        self.lock.release()
+                    elif fetch:
+                        self.lock.acquire()
                         self.cursor.execute(query)
-                    if fetch:
-                        return self.cursor.fetchall()
+                        result = self.cursor.fetchall()
+                        self.lock.release()
+                        return result
+                    else:
+                        self.lock.acquire()
+                        self.cursor.execute(query)
+                        self.lock.release()
                     return True
                 except connector.Error as err:
+                    self.lock.release()
                     if err.errno == errorcode.ER_BAD_TABLE_ERROR:
                         print("Table does not exist:", self.TABLE_NAME)
                         self.create_table()
                     elif err.errno == errorcode.ER_DUP_ENTRY:
                         # print("link is repeated")
                         pass
+                    elif err.errno == errorcode.CR_SERVER_LOST:
+                        self.connect()
+                        if values is not None:
+                            self.execute(query, values=values)
+                        elif fetch:
+                            self.execute(query, fetch=True)
+                            return self.cursor.fetchall()
+                        else:
+                            self.execute(query)
                     else:
                         print(err.errno, ":", sep="", end=" ")
                         print("While executing query")
@@ -140,16 +162,17 @@ class CrawlerDBHandler:
             return False, []
         return False
 
-    def get_unvisited(self):
+    def get_uncrawled(self):
         """ Retrieves unvisited links from the database. """
-        get_unvisit = f"SELECT * FROM {self.TABLE_NAME} WHERE is_crawled=0;"
-        result = self.execute(query=get_unvisit, fetch=True)
+        get_uncrawl = f"SELECT * FROM {self.TABLE_NAME} WHERE is_crawled=0 LIMIT {self.MAX_ROW_LIMIT};"
+        result = self.execute(query=get_uncrawl, fetch=True)
         return list(result)
 
     def get_unrefreshed(self, from_dt=datetime.now() - timedelta(days=1)):
-        """ Fetchs unrefreshed data which aren't updated recently. """
+        """ Fetches unrefreshed data which aren't updated recently. """
         get_unrefreshed = f'''SELECT * FROM {self.TABLE_NAME} 
-        WHERE last_crawl_dt > {from_dt.strftime("%Y-%-m-%-d %H:%M:%S")};'''
+        WHERE last_crawl_dt <= "{from_dt.strftime("%Y-%-m-%-d %H:%M:%S")}" 
+        LIMIT {self.MAX_ROW_LIMIT};'''
         result = self.execute(query=get_unrefreshed, fetch=True)
         return list(result)
 
@@ -172,7 +195,6 @@ class CrawlerDBHandler:
         result = self.execute(f"SELECT COUNT(*) FROM {self.TABLE_NAME};", fetch=True)
         # print("row_count:", result)
         # indexes at end of statement [row_index][column name]
-        print("row count result:", result)
         row = result[0]
         row_count = result[0]['COUNT(*)']
         return row_count

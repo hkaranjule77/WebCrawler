@@ -1,5 +1,13 @@
 # WebCrawler
-Surfs Internet and stores a copy of a web page
+Surfs Internet through scraping links. It is built with python language and utilize SQL to maintain data.
+
+## Features
+- Scrapes valid link only.
+- Stores a copy of a Wepage.
+- Suppoorts Multi-threading with optimized performance.
+- Maintains consistency of database.
+- Varied maximum link storage limit.
+- Refreshs content of in every 24 hours.
 
 ## Software Requirements  
 - Git 

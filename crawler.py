@@ -1,7 +1,4 @@
 # global imports
-
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
 import bs4
 import configparser
 import os
@@ -9,43 +6,18 @@ import random
 import re
 import requests
 import string
-import threading
 import time
 
 # relative local imports
 import db
-import logger
-
-
-class Lock:
-    def __init__(self):
-        self.is_locked = False
-
-    def acquire(self):
-        if self.is_locked:
-            while self.is_locked:
-                pass
-        self.is_locked = True
-
-    def release(self):
-        self.is_locked = False
 
 
 class WebCrawler:
-    def __init__(self, link_fetcher):
-        """ Initializes configuration and starts crawls. """
-        # TODO: create log of error links or when it's invalid also log it.
-        # TODO: update files instead of creating new file.
-        self.db_handler = db.CrawlerDBHandler(con_count=25)
-        self.link_fetcher = link_fetcher
-        self.links = []
-        self.logger = logger.Logger()
+    def __init__(self):
+        """ Initializes configuration of Web Crawler. """
+        self.config = self.__class__.__read_config()
+        self.db_handler = db.CrawlerDBHandler()
         self.save_limit_reached = False
-        self.unvisited_links = []
-        self.unrefreshed_links = []
-        self.__read_config()
-        self.__add_base_url()
-        self.create_html_dir()
         self.timeout = self.config['request_timeout']
 
     def __add_base_url(self):
@@ -54,75 +26,17 @@ class WebCrawler:
             link = self.config['base_url']
             self.db_handler.insert_unvisited(link, 'NA')
 
-    def visit(self, link_row):
-        """ Executes steps required for scraping. """
-        # unvisited
-        # print("Crawling:", link_row["link"])
-        response = self.get_page(link_row)
-        if response is not False and response.status_code == 200:
-            if not self.save_limit_reached:
-                self.add_new_links(response.text, response.url)
-            if link_row['is_crawled']:
-                file_path = WebCrawler.save_page(
-                    self.config['html_page_dir'],
-                    response.text,
-                    file_path=link_row['file_path']
-                )
-            else:
-                file_path = WebCrawler.save_page(self.config['html_page_dir'], response.text)
-            self.update_row(link_row["id"], response, file_path)
-        if response is not False:
-            self.db_handler.update_visit(link_row["id"], resp_status=response.status_code)
-        else:
-            self.db_handler.update_visit(link_row["id"], resp_status=204)
+    def __create_html_dir(self):
+        """ Creates directory for storing html files. """
+        try:
+            os.makedirs(self.config["html_dir_name"])
+        except FileExistsError:
+            pass
 
-    def crawl(self):
-        """ Main method of a WebCrawler object. """
-        '''
-        self.fetch_links()
-        print("Links to be visited:", len(self.unvisited_links), len(self.unrefreshed_links))
-        # Multi-threading
-        while True:
-            threads = ThreadPoolExecutor(max_workers=self.config['parallel_thread_count'])
-            threads.map(self.visit, self.unvisited_links)
-            threads.map(self.visit, self.unrefreshed_links)
-            threads.shutdown()
-            while threading.active_count() != 1:
-                print("threads", threading.active_count())
-                time.sleep(10)
-            self.fetch_links()
-            if len(self.unrefreshed_links) == 0 and len(self.unvisited_links) == 0:
-                print("All links crawled.")
-                time.sleep(self.config['sleep_time'])
-            '''
-        '''
-        # Single-threading
-        while True:
-            while len(self.unvisited_links) > 0:
-                if len(self.unvisited_links) != 0:
-                    link = self.unvisited_links.pop()
-                elif len(self.unrefreshed_links) != 0:
-                    link = self.unrefreshed_links.pop()
-                else:
-                    break
-                self.visit(link)
-            self.fetch_links()
-            
-            # self.threads.map(self.__new_visit, self.unvisited_links)
-            
-            if len(self.unvisited_links) == 0 and len(self.unrefreshed_links) == 0:
-                print("All links crawled")
-                time.sleep(5)
-        '''
-        while True:
-            link = self.link_fetcher.pop()
-            self.link_fetcher.release_lock()
-            self.visit(link_row=link)
-
-
-    def __read_config(self):
-        """ Reads Configurations into a params dictionary. """
-        self.config = {}
+    @staticmethod
+    def __read_config():
+        """ Reads Configurations parameters into a dictionary. """
+        config = {}
         config_parser = configparser.ConfigParser()
         config_parser.read("config.cfg")
         for k, v in config_parser.items("setting"):
@@ -130,19 +44,20 @@ class WebCrawler:
                 v = int(v)
             except ValueError:
                 pass
-            self.config.update({k: v})
-
-    def __refresh_visit(self, link_row):
-        """ Revisits links and updates database with new data. """
-        # print("refresh:", link_row['link'])
-        response = self.get_page(link_row["link"])
-        if response is not False:
-            self.add_new_links(response.text, response.url)
-
-            self.update_row(link_row["id"], response, file_path)
+            config.update({k: v})
+        return config
 
     def add_new_links(self, html_text, html_url):
-        """ Finds and adds new links into the database. """
+        """
+        Finds new links and adds them into the database.
+
+        Parameters:
+            html_text(str): text content of html page.
+            html_url(str): visited url from where html page was downloaded.
+
+        Returns:
+            None
+        """
         # print("Insert query:", html_url)
         if not self.save_limit_reached:
             new_links = WebCrawler.scrape(html_text, html_url)
@@ -157,55 +72,57 @@ class WebCrawler:
                     print("Maximum limit reached")
                     break
 
-    def create_html_dir(self):
-        """ Creates directory for storing html files. """
-        try:
-            os.makedirs(self.config["html_page_dir"])
-        except FileExistsError:
-            pass
-
-    def fetch_links(self):
-        """ Updates unvisited  links firsts if those are done.
-            Then unrefreshed links are updated. """
-        self.unvisited_links = self.db_handler.get_unvisited()
-        refresh_after = int(self.config["link_refresh_after_hrs"])
-        self.unrefreshed_links = self.db_handler.get_unrefreshed(datetime.now() - timedelta(hours=refresh_after))
-
     def get_page(self, link_row):
-        """ Downloads a webpage from provided hyperlink. """
+        """
+        Downloads a html webpage from provided hyperlink.
+
+        Parameters:
+            link_row(dict): a row from table links with column name as keys.
+
+        Returns:
+            response(requests.models.Response): If successfully downloads a webpage
+            None: If any failure occurs during download.
+        """
         try:
             link = link_row['link']
+        except ValueError:
+            return False
+        try:
             response = requests.get(link, timeout=self.timeout, headers={"Accept-Encoding": None})
-            print(response.status_code, response.headers)
             print("visited:", link)
             return response
         except requests.exceptions.MissingSchema:
-            print("MissingSchema", link)
-            self.db_handler.update_visit(id=link_row['id'], resp_status=404)
-            self.logger.log("missing_schema", link)
+            # print("MissingSchema", link)
+            self.db_handler.update_visit(row_id=link_row['id'], resp_status=404)
         except requests.exceptions.InvalidSchema:
-            print("InvalidSchema", link)
-            self.db_handler.update_visit(id=link_row['id'], resp_status=404)
-            self.logger.log("invalid_schema", link)
+            # print("InvalidSchema", link)
+            self.db_handler.update_visit(row_id=link_row['id'], resp_status=404)
         except requests.exceptions.ConnectionError:
-            print("ConnectionError:", link)
-            self.db_handler.update_visit(id=link_row['id'], resp_status=502)
-            self.logger.log("connection_error", link)
+            # print("ConnectionError:", link)
+            time.sleep(10)                                 # to avoid infinite looping in case of network failure
+            self.db_handler.update_visit(row_id=link_row['id'], resp_status=502)
         except requests.exceptions.TooManyRedirects:
-            print("Too Many Redirects:", link)
-            self.db_handler.update_visit(id=link_row['id'], resp_status=502)
-            self.logger.log("too_many_redirect", link)
+            # print("Too Many Redirects:", link)
+            self.db_handler.update_visit(row_id=link_row['id'], resp_status=502)
         except requests.exceptions.Timeout:
-            print("Timeout:", link)
-            self.db_handler.update_visit(id=link_row['id'], resp_status=408)
-            self.logger.log("timeout.log", link)
-        return False
+            # print("Timeout:", link)
+            self.db_handler.update_visit(row_id=link_row['id'], resp_status=408)
+        return None
 
     @staticmethod
     def get_valid_link(link, src_link):
-        """ Checks if link is valid or not. """
-        if link.startswith("/"):
-            # converts relative to absolute
+        """
+        Checks if link is valid or not.
+
+        Parameters:
+            link(str): a unvalidated link.
+            src_link(str): a hyperlink of webpage from which above link was extracted.
+
+        Returns:
+            link(str): a validated/corrected link
+        """
+        if link.startswith("/") or link.startswith("./") or link.startswith("../"):
+            # converts relative to absolute link
             link = requests.compat.urljoin(src_link, link)
             return link
         has_proto = False
@@ -217,14 +134,28 @@ class WebCrawler:
         if has_proto and has_domain:
             return link
         else:
-            log_obj = logger.Logger()
-            log_obj.log('rejected', link)
-            del log_obj
             return None
+
+    def setup(self):
+        """ It does one time work of setup if not done. """
+        # initialization methods
+        self.__add_base_url()
+        self.__create_html_dir()
+        self.db_handler.print_connect()
 
     @staticmethod
     def save_page(html_dir, page_text, file_path=None):
-        """ It uses specified file_path or else generates random name to save a webpage. """
+        """
+        It uses specified file_path or else generates random name to save a webpage.
+
+        Parameters:
+            html_dir(str): A path or name of directory where html page should be stored.
+            page_text(str): A text content of html webpage.
+            file_path(str): A file path if a html file is already stored for the currently visited link.
+
+        Returns:
+            file_path(str): A file path where html content is stored. For storing it in the database.
+        """
         # generates random name
         if file_path is None:
             while True:
@@ -240,7 +171,16 @@ class WebCrawler:
 
     @staticmethod
     def scrape(webpage, src_link):
-        """ Scrapes and returns list of links from provided webpage. """
+        """
+        Scrapes list of valid links from provided webpage and returns it.
+
+        Parameters:
+            webpage(str): A text content of downloaded html page.
+            src_link(str): A text of hyperlink from which a webpage is download.
+
+        Returns:
+            links(list): A list of valid scraped links from the passed webpage.
+        """
         links = []
         soup = bs4.BeautifulSoup(webpage, "html.parser")
         for a_tag in soup.find_all("a"):
@@ -255,18 +195,61 @@ class WebCrawler:
         return links
 
     def update_row(self, row_id, response, file_path=None):
-        """ Saves updated data of link in corresponding row of database. """
+        """
+        Saves updated data of link in corresponding row of database.
+
+        Parameters:
+            row_id(int): A primary key of the row at which links is stored in the database table.
+            response(requests.models.Response): A GET Response value of the URL visited by requests.
+            file_path(str): A path of the file where currently downloaded webpage is stored.
+
+        Returns:
+             None
+        """
         if response.status_code == 200:
             content_type = response.headers['Content-Type']
             try:
                 content_len = response.headers['Content-Length']
             except KeyError:
                 content_len = len(response.content)
-                self.db_handler.update_visit(id=row_id,
-                                             resp_status=response.status_code,
-                                             content_type=content_type,
-                                             content_len=content_len,
-                                             file_path=file_path)
+            self.db_handler.update_visit(row_id=row_id,
+                                         resp_status=response.status_code,
+                                         content_type=content_type,
+                                         content_len=content_len,
+                                         file_path=file_path)
         else:
-            self.db_handler.update_visit(id=row_id,
+            self.db_handler.update_visit(row_id=row_id,
                                          resp_status=response.status_code)
+
+    def visit(self, **link_row):
+        """
+        Performs each and every steps required for scraping and crawling. This method is made such that it needs to be
+        separately called for each hyperlink.
+
+        Parameters:
+            link_row(kwargs): A Dictionary of row value from a database table of hyperlinks.
+
+        Returns:
+            None
+        """
+        # print("Crawling:", link_row["link"])
+        response = self.get_page(link_row)
+        if response is not None and response.status_code == 200:
+            if not self.save_limit_reached:
+                self.add_new_links(response.text, response.url)
+            if link_row['is_crawled']:
+                try:
+                    file_path = WebCrawler.save_page(
+                        self.config['html_page_dir'],
+                        response.text,
+                        file_path=link_row['file_path']
+                    )
+                except KeyError:
+                    file_path = WebCrawler.save_page(self.config['html_dir_name'], response.text)
+            else:
+                file_path = WebCrawler.save_page(self.config['html_dir_name'], response.text)
+            self.update_row(link_row["id"], response, file_path)
+        elif response is not None:
+            self.db_handler.update_visit(link_row["id"], resp_status=response.status_code)
+        else:
+            self.db_handler.update_visit(link_row["id"], resp_status=204)

@@ -1,9 +1,13 @@
+# Local Imports
 from crawler import WebCrawler
-from fetcher import LinkFetcher
-'''
-crawler = WebCrawler()
-crawler.crawl()
-'''
+from thread_manager import ThreadManager
 
-link_fetcher = LinkFetcher()
-thread_manager =
+
+# to carry out some initialization tasks
+crawler = WebCrawler()
+crawler.setup()
+del crawler
+
+# Multi-threading crawling
+crawl_threads = ThreadManager()
+crawl_threads.execute()

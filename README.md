@@ -59,7 +59,8 @@ Visit following links to download and install MySQL:
 - [MySQL Installer Page](https://dev.mysql.com/downloads/installer/)
 
 ### Anaconda Package Manager
-You can skip this step if you don't have any plans to work with Python.  
+*You can skip this step if you don't have any plans to work with Python.*. 
+
 Or visit following hyperlink to know more about how to install Anaconda on various Operating System.
 - [Installation Guide](https://docs.anaconda.com/anaconda/install/index.html)
   

@@ -3,11 +3,11 @@ Surfs Internet through scraping links. It is built with python language and util
 
 ## Features
 - Scrapes valid link only.
-- Stores a copy of a Wepage.
-- Suppoorts Multi-threading with optimized performance.
-- Maintains consistency of database.
+- Stores a copy of a Webpage.
+- Supports Multi-threading with optimized performance.
+- Maintains consistency of the database.
 - Varied maximum link storage limit.
-- Refreshs content of in every 24 hours.
+- Refreshs content after specified interval of time.
 
 ## Software Requirements  
 - Git 
